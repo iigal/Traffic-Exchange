@@ -1,14 +1,28 @@
 <?php
-session_start();
-include("vars.php");
+/**
+ * bar_break.php - Surf error / session-break page.
+ * Destroys the surf session and bounces the user back to the site, showing the
+ * (escaped) reason. Rewritten with full PHP tags; the query string is now
+ * HTML-escaped to close an XSS hole.
+ */
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_name('TrafExchange');
+    session_start();
+}
+include('vars.php');
 flush();
-header("Cache-control: private");
+header('Cache-control: private');
 $_SESSION = array();
 session_destroy();
+
+$reason = htmlspecialchars($_SERVER['QUERY_STRING'] ?? '', ENT_QUOTES);
+$title_esc = htmlspecialchars($title);
+$self_esc  = htmlspecialchars($self_url);
 ?>
 <html>
 <head>
-<title><? echo("$title"); ?> - Surf Error</title>
+<title><?php echo $title_esc; ?> - Surf Error</title>
 <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
 <script>
 <!--
@@ -17,17 +31,17 @@ top.location.href=location.href;
 }
 // -->
 </script>
-<? echo("<meta http-equiv=\"Refresh\" content=\"1;URL=$self_url\">"); ?>
+<meta http-equiv="Refresh" content="1;URL=<?php echo $self_esc; ?>">
 </head>
 <body>
-<div align="center"> 
+<div align="center">
   <table width="100%" border="0">
-    <tr> 
-      <td height="79"><div align="center"><font size="2" face="<? echo("$fontface"); ?>"><strong><a href="<? echo("$self_url"."login.php"); ?>" target="_top">Click 
+    <tr>
+      <td height="79"><div align="center"><font size="2" face="<?php echo htmlspecialchars($fontface); ?>"><strong><a href="<?php echo $self_esc; ?>login.php" target="_top">Click
           Here to Login</a></strong></font></div>
         </td>
-      <td width="69%" valign="top"><div align="center"> 
-          <p><strong><? echo($_SERVER['QUERY_STRING']); ?><br>
+      <td width="69%" valign="top"><div align="center">
+          <p><strong><?php echo $reason; ?><br>
             </strong></p>
         </div></td>
     </tr>
@@ -35,7 +49,5 @@ top.location.href=location.href;
 </div>
 </body>
 </html>
-<?
-mysql_close;
+<?php
 exit;
-?>

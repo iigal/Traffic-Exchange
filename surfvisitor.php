@@ -1,73 +1,70 @@
 <?php
-session_start();
-include("vars.php");
-mysql_connect($db_host, $db_user, $db_pwd);
-mysql_select_db($db_name);
+/**
+ * surfvisitor.php - Guest (trial) surf session setup. No real credits are
+ * earned; this just lets visitors preview the surf experience. Migrated to the
+ * shared mysqli layer and made PHP 8 warning-safe.
+ */
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_name('TrafExchange');
+    session_start();
+}
+include('vars.php');
+include('db.php');
+
+db_connect();
+
 $usrid = 'Guest';
 $daily_max = 999999999999;
-if ($_SESSION['sess_data']['usrid'] != $usrid) {
- $_SESSION['sess_data']['cts'] = 0;
- $_SESSION['sess_data']['sts'] = 0;
- $_SESSION['sess_data']['pgv'] = 0;
- $_SESSION['sess_data']['usrid'] = $usrid;
+
+if (($_SESSION['sess_data']['usrid'] ?? null) != $usrid) {
+    $_SESSION['sess_data']['cts'] = 0;
+    $_SESSION['sess_data']['sts'] = 0;
+    $_SESSION['sess_data']['pgv'] = 0;
+    $_SESSION['sess_data']['usrid'] = $usrid;
 }
-/*
-if (mysql_num_rows($res) != 0)
+
+/** Read a numeric admin property. */
+function te_prop($field, $default = 0)
 {
-	$crds_today = mysql_result($res, 0, "num");
+    $v = db_scalar('SELECT value FROM adminprops WHERE field = ? LIMIT 1', 's', array($field));
+    return ($v === null) ? $default : $v;
 }
-else
-{
-	$crds_today = 0;
+
+$_SESSION['sess_data']['negact'] = te_prop('negact', 0);
+$_SESSION['sess_data']['reftim'] = max(1, (int) te_prop('reftim', 6));
+
+$contex = (float) te_prop('contex', 0);
+if ($contex != 0) {
+    $_SESSION['sess_data']['contex'] = $contex;
+    $_SESSION['sess_data']['contey'] = te_prop('contey', 0);
 }
-@mysql_free_result($res);
-@mysql_free_result($crds_today);
-*/
-$res = mysql_query("select value from adminprops where field='negact'");
-$_SESSION['sess_data']['negact'] = mysql_result($res, 0, "value");
-@mysql_free_result($res);
-$res = mysql_query("select value from adminprops where field='reftim'");
-$_SESSION['sess_data']['reftim'] = mysql_result($res, 0, "value");
-@mysql_free_result($res);
-$res = mysql_query("select value from adminprops where field='contex'");
-if (mysql_result($res, 0, "value") != 0) {
-$_SESSION['sess_data']['contex'] = mysql_result($res, 0, "value");
-@mysql_free_result($res);
-$res = mysql_query("select value from adminprops where field='contey'");
-$_SESSION['sess_data']['contey'] = mysql_result($res, 0, "value");
+$contcx = (float) te_prop('contcx', 0);
+if ($contcx != 0) {
+    $_SESSION['sess_data']['contcx'] = $contcx;
+    $_SESSION['sess_data']['contcy'] = te_prop('contcy', 0);
 }
-@mysql_free_result($res);
-$res = mysql_query("select value from adminprops where field='contcx'");
-if (mysql_result($res, 0, "value") != 0) {
-$_SESSION['sess_data']['contcx'] = mysql_result($res, 0, "value");
-@mysql_free_result($res);
-$res = mysql_query("select value from adminprops where field='contcy'");
-$_SESSION['sess_data']['contcy'] = mysql_result($res, 0, "value");
-}
-@mysql_free_result($res);
-$_SESSION['sess_data']['mmax'] = 0;
-switch($rate) {
- case 1:
- $rate = 'ratemin';
- break;
- case 0:
- $rate = 'ratemax';
- break;
- default:
- $rate = 'ratemax';
- break;
-}
-@mysql_free_result($res);
-$_SESSION['sess_data']['rate'] = 0.5;
-$_SESSION['sess_data']['ref'] = 0;
+
+$_SESSION['sess_data']['mmax']    = 0;
+$_SESSION['sess_data']['rate']    = 0.5;
+$_SESSION['sess_data']['ref']     = 0;
 $_SESSION['sess_data']['surfing'] = rand(9999, 9999999999);
-$_SESSION['sess_data']['from'] = md5($_SESSION['sess_data']['surfing']);
-if ($_GET['next'] == md5($_SESSION['sess_data']['surf_encoder_vals'])) {
- $s_bar_url = "surfbarvisitor.php?PHPSESSID=" . session_id() . "&vc_val=" . $_GET['next'];
+$_SESSION['sess_data']['from']    = md5($_SESSION['sess_data']['surfing']);
+
+$next = $_GET['next'] ?? '';
+if ($next !== '' && isset($_SESSION['sess_data']['surf_encoder_vals'])
+    && $next === md5($_SESSION['sess_data']['surf_encoder_vals'])) {
+    $s_bar_url = 'surfbarvisitor.php?PHPSESSID=' . session_id() . '&vc_val=' . urlencode($next);
 } else {
- $s_bar_url = "surfbarvisitor.php?PHPSESSID=" . session_id() . "&vc_val=begin&coder=". md5($_SESSION['sess_data']['from']);
+    $s_bar_url = 'surfbarvisitor.php?PHPSESSID=' . session_id()
+        . '&vc_val=begin&coder=' . md5($_SESSION['sess_data']['from']);
 }
-echo("<html>\n<head>\n<title>$title's Trial Surf</title>\n<link rel=stylesheet type=text/css href=$self_url" . "style.css>\n</head>\n<frameset rows=90,* border=0><frame marginheight=0 marginwidth=0 scrolling=no noresize border=0 src=\"$s_bar_url\"><frame marginheight=0 marginwidth=0 scrolling=auto noresize border=0 src=/target.php></frameset>\n</html>");
-mysql_close;
+
+$title_esc = htmlspecialchars($title);
+echo "<html>\n<head>\n<title>$title_esc's Trial Surf</title>\n"
+    . "<link rel=stylesheet type=text/css href=" . htmlspecialchars($self_url) . "style.css>\n</head>\n"
+    . "<frameset rows=90,* border=0>"
+    . "<frame marginheight=0 marginwidth=0 scrolling=no noresize border=0 src=\"" . htmlspecialchars($s_bar_url) . "\">"
+    . "<frame marginheight=0 marginwidth=0 scrolling=auto noresize border=0 src=/target.php>"
+    . "</frameset>\n</html>";
 exit;
-?>

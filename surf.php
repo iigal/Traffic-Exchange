@@ -1,87 +1,112 @@
 <?php
-session_start();
-include("vars.php");
-include("auth.php");
-mysql_connect($db_host, $db_user, $db_pwd);
-mysql_select_db($db_name);
-$res = checkauth();
-$usrid = mysql_result($res, 0, "id");
-$acctype = mysql_result($res, 0, "acctype");
-@mysql_free_result($res);
-if ($acctype == 1) {$daily_max = $surf_max_free;} else {$daily_max = $surf_max_pro;}
-if ($_SESSION['sess_data']['usrid'] != $usrid) {
-	$_SESSION['sess_data']['cts'] = 0;
-	$_SESSION['sess_data']['sts'] = 0;
-	$_SESSION['sess_data']['pgv'] = 0;
-	$_SESSION['sess_data']['usrid'] = $usrid;
+/**
+ * surf.php - Starts an authenticated surf session and renders the surf frameset.
+ *
+ * Migrated from the removed mysql_* API to the shared mysqli layer (db.php),
+ * hardened against PHP 8 "undefined key" warnings, and made safe against SQL
+ * injection (all identifiers are constants; user id comes from an authenticated
+ * lookup).
+ */
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_name('TrafExchange');
+    session_start();
 }
-$res = mysql_query("SELECT num FROM 7stat WHERE usrid=$usrid && date='".date('Y-m-d')."'");
-if (mysql_num_rows($res) != 0)
+
+include('vars.php');
+include('db.php');
+include('auth.php');
+
+db_connect();
+
+$user   = checkauth();
+$usrid  = (int) $user['id'];
+$acctype = (int) $user['acctype'];
+
+$daily_max = ($acctype == 1) ? $surf_max_free : $surf_max_pro;
+
+if (($_SESSION['sess_data']['usrid'] ?? null) != $usrid) {
+    $_SESSION['sess_data']['cts'] = 0;
+    $_SESSION['sess_data']['sts'] = 0;
+    $_SESSION['sess_data']['pgv'] = 0;
+    $_SESSION['sess_data']['usrid'] = $usrid;
+}
+
+$today = date('Y-m-d');
+
+// Enforce the daily credit cap before starting a session.
+$crds_today = (float) db_scalar(
+    "SELECT num FROM 7stat WHERE usrid = ? AND date = ?",
+    'is',
+    array($usrid, $today),
+    0
+);
+
+if ($crds_today >= $daily_max) {
+    echo 'Sorry you have earned your daily maximum of ' . htmlspecialchars($daily_max)
+        . ' credits!<br />Please return tomorrow!<br /><br />'
+        . '<a href="' . htmlspecialchars($self_url) . '">Login to your account here</a>';
+    session_destroy();
+    exit;
+}
+
+/**
+ * Read a numeric admin property.
+ */
+function te_prop($field, $default = 0)
 {
-	$crds_today = mysql_result($res, 0, "num");
+    $v = db_scalar('SELECT value FROM adminprops WHERE field = ? LIMIT 1', 's', array($field));
+    return ($v === null) ? $default : $v;
 }
-else
-{
-	$crds_today = 0;
+
+$_SESSION['sess_data']['negact'] = te_prop('negact', 0);
+$_SESSION['sess_data']['reftim'] = max(1, (int) te_prop('reftim', 6));
+
+$contex = (float) te_prop('contex', 0);
+if ($contex != 0) {
+    $_SESSION['sess_data']['contex'] = $contex;
+    $_SESSION['sess_data']['contey'] = te_prop('contey', 0);
 }
-@mysql_free_result($res);
-if ($crds_today >= $daily_max)
-{
-	echo("Sorry you have earned your daily maximum of $daily_max credits!<br />Please return tomorrow!<br /><br /><a href=\"$self_url\">Login to your account here</a>");
-	session_destroy();
-	mysql_close;
-	exit;
+
+$contcx = (float) te_prop('contcx', 0);
+if ($contcx != 0) {
+    $_SESSION['sess_data']['contcx'] = $contcx;
+    $_SESSION['sess_data']['contcy'] = te_prop('contcy', 0);
 }
-@mysql_free_result($crds_today);
-$res = mysql_query("select value from adminprops where field='negact'");
-$_SESSION['sess_data']['negact'] = mysql_result($res, 0, "value");
-@mysql_free_result($res);
-$res = mysql_query("select value from adminprops where field='reftim'");
-$_SESSION['sess_data']['reftim'] = mysql_result($res, 0, "value");
-@mysql_free_result($res);
-$res = mysql_query("select value from adminprops where field='contex'");
-if (mysql_result($res, 0, "value") != 0) {
-	$_SESSION['sess_data']['contex'] = mysql_result($res, 0, "value");
-	@mysql_free_result($res);
-	$res = mysql_query("select value from adminprops where field='contey'");
-	$_SESSION['sess_data']['contey'] = mysql_result($res, 0, "value");
-}
-@mysql_free_result($res);
-$res = mysql_query("select value from adminprops where field='contcx'");
-if (mysql_result($res, 0, "value") != 0) {
-	$_SESSION['sess_data']['contcx'] = mysql_result($res, 0, "value");
-	@mysql_free_result($res);
-	$res = mysql_query("select value from adminprops where field='contcy'");
-	$_SESSION['sess_data']['contcy'] = mysql_result($res, 0, "value");
-}
-@mysql_free_result($res);
-$res = mysql_query("select minmax from user where id=$usrid");
-$rate = mysql_result($res, 0, "minmax");
-$_SESSION['sess_data']['mmax'] = $rate;
-switch($rate) {
-	case 1:
-		$rate = 'ratemin';
-		break;
-	case 0:
-		$rate = 'ratemax';
-		break;
-	default:
-		$rate = 'ratemax';
-		break;
-}
-@mysql_free_result($res);
-$res = mysql_query("select $rate, ref from acctype, user where acctype.id=user.acctype && user.id=$usrid");
-$_SESSION['sess_data']['rate'] = mysql_result($res, 0, $rate);
-$_SESSION['sess_data']['ref'] = mysql_result($res, 0, "ref");
-@mysql_free_result($res);
+
+// Per-user credit rate: minmax picks the min or max rate for their account type.
+$minmax = (int) db_scalar('SELECT minmax FROM user WHERE id = ? LIMIT 1', 'i', array($usrid), 0);
+$_SESSION['sess_data']['mmax'] = $minmax;
+$rate_col = ($minmax === 1) ? 'ratemin' : 'ratemax';
+
+$rate_row = db_row(
+    "SELECT acctype.$rate_col AS rate, user.ref AS ref
+       FROM acctype, user
+      WHERE acctype.id = user.acctype AND user.id = ? LIMIT 1",
+    'i',
+    array($usrid)
+);
+$_SESSION['sess_data']['rate'] = $rate_row ? (float) $rate_row['rate'] : 0;
+$_SESSION['sess_data']['ref']  = $rate_row ? (int) $rate_row['ref'] : 0;
+
+// Fresh anti-tamper token for this surf session.
 $_SESSION['sess_data']['surfing'] = rand(9999, 9999999999);
-$_SESSION['sess_data']['from'] = md5($_SESSION['sess_data']['surfing']);
-if ($_GET['next'] == md5($_SESSION['sess_data']['surf_encoder_vals'])) {
-	$s_bar_url = "surfbar.php?PHPSESSID=" . session_id() . "&vc_val=" . $_GET['next'];
+$_SESSION['sess_data']['from']    = md5($_SESSION['sess_data']['surfing']);
+
+$next = $_GET['next'] ?? '';
+if ($next !== '' && isset($_SESSION['sess_data']['surf_encoder_vals'])
+    && $next === md5($_SESSION['sess_data']['surf_encoder_vals'])) {
+    $s_bar_url = 'surfbar.php?PHPSESSID=' . session_id() . '&vc_val=' . urlencode($next);
 } else {
-	$s_bar_url = "surfbar.php?PHPSESSID=" . session_id() . "&vc_val=begin&coder=". md5($_SESSION['sess_data']['from']);
+    $s_bar_url = 'surfbar.php?PHPSESSID=' . session_id()
+        . '&vc_val=begin&coder=' . md5($_SESSION['sess_data']['from']);
 }
-echo("<html>\n<head>\n<title>$title: Surf</title>\n<link rel=stylesheet type=text/css href=$self_url" . "style.css>\n</head>\n<frameset rows=90,* border=0><frame marginheight=0 marginwidth=0 scrolling=no noresize border=0 src=\"$s_bar_url\"><frame marginheight=0 marginwidth=0 scrolling=auto noresize border=0 src=./target.php></frameset>\n</html>");
-mysql_close;
+
+$title_esc = htmlspecialchars($title);
+echo "<html>\n<head>\n<title>$title_esc: Surf</title>\n"
+    . "<link rel=stylesheet type=text/css href=" . htmlspecialchars($self_url) . "style.css>\n</head>\n"
+    . "<frameset rows=90,* border=0>"
+    . "<frame marginheight=0 marginwidth=0 scrolling=no noresize border=0 src=\"" . htmlspecialchars($s_bar_url) . "\">"
+    . "<frame marginheight=0 marginwidth=0 scrolling=auto noresize border=0 src=./target.php>"
+    . "</frameset>\n</html>";
 exit;
-?>

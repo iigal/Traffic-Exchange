@@ -1,51 +1,79 @@
 <?php
-session_start();
-//session_register("sess_data");
-include("vars.php");
-include("headfoot.php");
-include("auth.php");
-mysql_connect($db_host, $db_user, $db_pwd);
-mysql_select_db($db_name);
-$res = checkauth();
-$usrid = mysql_result($res, 0, "id");
-if ($_SESSION['sess_data']['ccwon'] != 'ccreallycc' || $_GET['next'] != md5($_SESSION['sess_data']['surf_encoder_vals'])) {
-header("Location: $self_url" . "surf.php?next=" . $_GET['next']);
-mysql_close;
-exit;
+/**
+ * bonus_cash.php - Credits a surf-contest "bonus cash" win to the member.
+ * Migrated to the shared mysqli layer and made PHP 8 warning-safe.
+ */
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_name('TrafExchange');
+    session_start();
+}
+
+include('vars.php');
+include('db.php');
+include('headfoot.php');
+include('auth.php');
+
+db_connect();
+
+$user  = checkauth();
+$usrid = (int) $user['id'];
+
+$next     = $_GET['next'] ?? '';
+$sess     = $_SESSION['sess_data'] ?? array();
+$expected = md5((string) ($sess['surf_encoder_vals'] ?? ''));
+
+if (($sess['ccwon'] ?? '') !== 'ccreallycc' || $next !== $expected) {
+    header('Location: ' . $self_url . 'surf.php?next=' . urlencode($next));
+    exit;
 }
 unset($_SESSION['sess_data']['ccwon']);
-$res = mysql_query("select value from adminprops where field='contcx'");
-if (mysql_result($res, 0, "value") != 0) {
-$contcx = mysql_result($res, 0, "value");
-$res = mysql_query("select value from adminprops where field='contcy'");
-$contcy = mysql_result($res, 0, "value");
-} else {
-header("Location: $self_url" . "surf.php?next=" . $_GET['next']);
-mysql_close;
-exit;
-}
-if ($contcy != $_SESSION['sess_data']['contcy']) {
-$_SESSION['sess_data']['contcy'] = $contcy;
-}
-if ($contcx != $_SESSION['sess_data']['contcx']) {
-header("Location: $self_url" . "surf.php?next=" . $_GET['next']);
-mysql_close;
-exit;
-}
-$get_stats = mysql_query("SELECT * FROM monthly_stats WHERE usrid=$usrid && yearis=" . date("Y") . " && monthis=" . date("m"));
-if (mysql_num_rows($get_stats) == 0) {
-$ins_upd = mysql_query("INSERT INTO monthly_stats (usrid, sbcash_earned, tot_owed, monthis, yearis) VALUES ($usrid, " . $_SESSION['sess_data']['contcy'] . ", " . $_SESSION['sess_data']['contcy'] . ", " . date("m") . ", " . date("Y") . ")") or die (mysql_error());
-} else {
-$ins_upd = mysql_query("UPDATE monthly_stats SET sbcash_earned=sbcash_earned+" . $_SESSION['sess_data']['contcy'] . ", tot_owed=tot_owed+" . $_SESSION['sess_data']['contcy'] . " WHERE usrid=$usrid && yearis=" . date("Y") . " && monthis=" . date("m")) or die (mysql_error());
-}
-$res = mysql_query("update user set roi_cash=roi_cash+" . $_SESSION['sess_data']['contcy'] . ", lifetime_cash=lifetime_cash+" . $_SESSION['sess_data']['contcy'] . ", sb_cash=sb_cash+" . $_SESSION['sess_data']['contcy'] . " where id=$usrid") or die (mysql_error());
-$surpres = mysql_query("update adminprops set value=value-" . $_SESSION['sess_data']['contcy'] . " where field='csurpl'");
-secheader();
 
-echo("<h4>Bonus Cash Won!</h4>
-<p>Congratulations! <b>\$" . $_SESSION['sess_data']['contcy'] . " Cash</b> was just added to your account!</p>\n<p><a href=$self_url" . "surf.php?next=" . $_GET['next'] . ">Continue back To Surf</a><br>
-<a href=$self_url" . "members/>Go To Member Area</a></p>\n");
+$contcx = (float) db_scalar("SELECT value FROM adminprops WHERE field = 'contcx' LIMIT 1", '', array(), 0);
+if ($contcx == 0) {
+    header('Location: ' . $self_url . 'surf.php?next=' . urlencode($next));
+    exit;
+}
+$contcy = db_scalar("SELECT value FROM adminprops WHERE field = 'contcy' LIMIT 1", '', array(), 0);
+
+if ($contcy != ($sess['contcy'] ?? null)) {
+    $_SESSION['sess_data']['contcy'] = $contcy;
+}
+if ($contcx != ($sess['contcx'] ?? null)) {
+    header('Location: ' . $self_url . 'surf.php?next=' . urlencode($next));
+    exit;
+}
+
+$award   = (float) ($_SESSION['sess_data']['contcy'] ?? 0);
+$yearis  = (int) date('Y');
+$monthis = (int) date('m');
+
+db()->begin_transaction();
+
+$has = db_scalar('SELECT usrid FROM monthly_stats WHERE usrid = ? AND yearis = ? AND monthis = ? LIMIT 1',
+    'iii', array($usrid, $yearis, $monthis));
+if ($has === null) {
+    db_write('INSERT INTO monthly_stats (usrid, sbcash_earned, tot_owed, monthis, yearis) VALUES (?, ?, ?, ?, ?)',
+        'iddii', array($usrid, $award, $award, $monthis, $yearis));
+} else {
+    db_write('UPDATE monthly_stats SET sbcash_earned = sbcash_earned + ?, tot_owed = tot_owed + ?
+              WHERE usrid = ? AND yearis = ? AND monthis = ?',
+        'ddiii', array($award, $award, $usrid, $yearis, $monthis));
+}
+
+$ok = db_write('UPDATE user SET roi_cash = roi_cash + ?, lifetime_cash = lifetime_cash + ?, sb_cash = sb_cash + ?
+                WHERE id = ?', 'dddi', array($award, $award, $award, $usrid));
+if ($ok === false) {
+    db()->rollback();
+} else {
+    db_write("UPDATE adminprops SET value = value - ? WHERE field = 'csurpl'", 'd', array($award));
+    db()->commit();
+}
+
+secheader();
+echo "<h4>Bonus Cash Won!</h4>
+<p>Congratulations! <b>\$" . htmlspecialchars($award) . " Cash</b> was just added to your account!</p>\n"
+    . "<p><a href=" . htmlspecialchars($self_url) . "surf.php?next=" . htmlspecialchars($next) . ">Continue back To Surf</a><br>
+<a href=" . htmlspecialchars($self_url) . "members/>Go To Member Area</a></p>\n";
 secfooter();
-mysql_close;
 exit;
-?>

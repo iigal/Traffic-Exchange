@@ -101,6 +101,7 @@ function get_ref_levels($mid,$z) {
 function credit_r_bonuses($par_id,$type,$ammt) {
 	global $mysqli;
 	$zzz = 0;
+	$return_val = 0;
 	for ($i=0; $i < count($par_id); $i++) {
 		$zzz++;
 		$get_ref_data = $mysqli->query("SELECT acctype FROM user WHERE id=".$par_id[$i]." && status='Active'");
@@ -127,9 +128,9 @@ function credit_r_bonuses($par_id,$type,$ammt) {
 				$mysqli->query("update adminprops set value=value-".$givebonus." where field='csurpl'");
 				$get_refstats = $mysqli->query("SELECT * FROM monthly_stats WHERE usrid=".$par_id[$i]." && yearis=" . date("Y") . " && monthis=" . date("m"));
 				if ($get_refstats->num_rows == 0) {
-					$mysqli->query("INSERT INTO monthly_stats (usrid, refptc_cash, tot_owed, monthis, yearis) VALUES (".$par_id[$i].", ".$givebonus.", ".$givebonus.", " . date("m") . ", " . date("Y") . ")") or die (mysql_error());
+					$mysqli->query("INSERT INTO monthly_stats (usrid, refptc_cash, tot_owed, monthis, yearis) VALUES (".$par_id[$i].", ".$givebonus.", ".$givebonus.", " . date("m") . ", " . date("Y") . ")") or error_log("Traffic-Exchange monthly_stats insert failed: " . $mysqli->error);
 				} else {
-					$mysqli->query("UPDATE monthly_stats SET refptc_cash=refptc_cash+".$givebonus.", tot_owed=tot_owed+".$givebonus." WHERE usrid=".$par_id[$i]." && yearis=" . date("Y") . " && monthis=" . date("m")) or die (mysql_error());
+					$mysqli->query("UPDATE monthly_stats SET refptc_cash=refptc_cash+".$givebonus.", tot_owed=tot_owed+".$givebonus." WHERE usrid=".$par_id[$i]." && yearis=" . date("Y") . " && monthis=" . date("m")) or error_log("Traffic-Exchange monthly_stats update failed: " . $mysqli->error);
 				}
 			}
 		}

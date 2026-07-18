@@ -1,149 +1,157 @@
 <?php
-session_start();
-include("vars.php");
-include("headfoot.php");
-mysql_connect($db_host, $db_user, $db_pwd);
-mysql_select_db($db_name);
-$userid = 'Guest';
-$my_investment = '0.00';
+/**
+ * surfbarvisitor.php - Guest (trial) surf toolbar. Shows rotating sites and
+ * records trial views under the reserved usrid 0, but awards no real account
+ * credits. Migrated to the shared mysqli layer and made PHP 8 warning-safe.
+ */
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_name('TrafExchange');
+    session_start();
+}
+include('vars.php');
+include('db.php');
+include('headfoot.php');
+
+db_connect();
+
 $my_acctype = 1;
-$my_last_roi = '0000-00-00';
-$my_ref = 0;
-$lastsurfed = 'Today';
-$daily_max = 9999999999;
+$daily_max  = 9999999999;
+$lastsurfed_time = '00:00:00';
 
- $lastsurfed_time = "00:00:00";
+$date     = date('Y-m-d');
+$time_now = date('H:i:s');
+$hour     = date('Y-m-d:H');
 
-$my_status = 'Visitor';
-$mref = $my_ref;
-if ($my_acctype == 1) {
- $min_credits_to_earn = $min_credits_to_earn_free;
- $roi_conversion_ratio = $roi_conversion_ratio_free;
-}
-/*
-if ($_SESSION['sess_data']['usrid'] != $usrid) {
- header("Location: " . $self_url . "bar_break.php?error=session-expired");
- mysql_close;
- exit;
-}
-exit;
-*/
+$sess   = $_SESSION['sess_data'] ?? array();
+$reftim = max(1, (int) ($sess['reftim'] ?? 6));
+$rate   = (float) ($sess['rate'] ?? 0.5);
+$negact = (int) ($sess['negact'] ?? 0);
+
 $credit_me = 'yes';
-$hour = date('Y-m-d:H');
-$date = date("Y-m-d");
-$time_now = date("H:i:s");
-/*
-if (!isset($_SESSION['sess_data']['usrid'])) {
- header("Location: " . $self_url . "bar_break.php?error=session-expired");
- mysql_close;
- exit;
+$encoder_token = md5((string) ($sess['surf_encoder_vals'] ?? ''));
+
+$vf_time_amt = date('H:i:s', strtotime("$lastsurfed_time + $reftim seconds"));
+if ($vf_time_amt > $time_now) {
+    $wait = $reftim - (time() - (int) ($sess['time'] ?? 0));
+    if ($wait > $reftim || $wait <= 0) {
+        $wait = $reftim;
+    }
+    echo "<head><title>" . htmlspecialchars($title) . "</title>"
+        . "<meta http-equiv=\"Refresh\" content=\"$wait;URL=" . htmlspecialchars($self_url)
+        . "surfbarvisitor.php?vc_val=$encoder_token\"></head><body>"
+        . "<b>Surfing too fast! Re-connecting in $wait seconds...</b></body></html>";
+    exit;
 }
 
-if ($_SESSION['sess_data']['from'] != md5($_SESSION['sess_data']['surfing'])) {
- header("Location: " . $self_url . "bar_break.php?error=inv-access");
- mysql_close;
- exit;
+$vc_val = $_GET['vc_val'] ?? '';
+$coder  = $_GET['coder'] ?? '';
+if ($vc_val === 'begin' && $coder === md5((string) ($sess['from'] ?? ''))) {
+    $credit_me = 'no';
+    $why = 'Starting/Resuming Session';
+} elseif ($vc_val !== $encoder_token) {
+    header('Location: ' . $self_url . '?error=inv-access');
+    exit;
 }
-*/
-$vf_time_amt = strftime("%H:%M:%S", strtotime("$lastsurfed_time + " . $_SESSION['sess_data']['reftim'] . " seconds"));
-if ($vf_time_amt>$time_now) {
- $wait = $_SESSION['sess_data']['reftim'] - (time() - $_SESSION['sess_data']['time']);
- if ($wait > $_SESSION['sess_data']['reftim'] || $wait == "" || $wait < 0) {
-  $wait = $_SESSION['sess_data']['reftim'];
- }
- echo("<head><title>$title</title><meta http-equiv=\"Refresh\" content=\"$wait;URL=" . $self_url . "surfvisitorbar.php?vc_val=" . md5($_SESSION['sess_data']['surf_encoder_vals']) . "\"></head><body><b>Surfing too fast! Re-connecting in $wait seconds...</b></body></html>");
- mysql_close;
- exit;
-}
-if ($_GET['vc_val'] == 'begin' && $_GET['coder'] == md5($_SESSION['sess_data']['from'])) {
- $credit_me = 'no';
- $why = "Starting/Resuming Session";
-} elseif ($_GET['vc_val'] != md5($_SESSION['sess_data']['surf_encoder_vals'])) {
- header("Location: " . $self_url . "?error=inv-access");
- mysql_close;
- exit;
-}
-if (!isset($_SESSION['sess_data']['time']) || (time() - $_SESSION['sess_data']['time']) >= $_SESSION['sess_data']['reftim']) {
- $_SESSION['sess_data']['time'] = time();
+
+if (!isset($sess['time']) || (time() - (int) $sess['time']) >= $reftim) {
+    $_SESSION['sess_data']['time'] = time();
+    $sess['time'] = $_SESSION['sess_data']['time'];
 } else {
- $wait = $_SESSION['sess_data']['reftim'] - (time() - $_SESSION['sess_data']['time']);
- echo("<head><title>$title</title><meta http-equiv=\"Refresh\" content=\"$wait;URL=" . $self_url . "surfbarvisitor.php?vc_val=" . md5($_SESSION['sess_data']['surf_encoder_vals']) . "\"></head><body><b>Surfing too fast! Re-connecting in $wait seconds...</b></body></html>");
- mysql_close;
- exit;
+    $wait = $reftim - (time() - (int) $sess['time']);
+    echo "<head><title>" . htmlspecialchars($title) . "</title>"
+        . "<meta http-equiv=\"Refresh\" content=\"$wait;URL=" . htmlspecialchars($self_url)
+        . "surfbarvisitor.php?vc_val=$encoder_token\"></head><body>"
+        . "<b>Surfing too fast! Re-connecting in $wait seconds...</b></body></html>";
+    exit;
 }
-@mysql_query("update site set hour='$hour', cth=0 where hour!='$hour' && cph!=0");
-$query = "select id, url from site where usrid!='" .$_SESSION['sess_data']['usrid'] . "' && state='Enabled'";
-if ($_SESSION['sess_data']['negact'] == 0) {$query = $query . " && credits>=1";}
-$query = $query . " && (cth<cph || cph=0)";
-$query = $query . " order by rand() limit 1";
-$res = mysql_query($query);
-if (mysql_num_rows($res) == 0) {
- $url = $default_site;
- $siteid = 0;
- @mysql_free_result($res);
+
+db_write('UPDATE site SET hour = ?, cth = 0 WHERE hour != ? AND cph != 0', 'ss', array($hour, $hour));
+
+$site_sql = 'SELECT id, url FROM site WHERE usrid != 0 AND state = ?';
+$types    = 's';
+$params   = array('Enabled');
+if ($negact == 0) {
+    $site_sql .= ' AND credits >= 1';
+}
+$site_sql .= ' AND (cth < cph OR cph = 0) ORDER BY rand() LIMIT 1';
+$site = db_row($site_sql, $types, $params);
+
+if (!$site) {
+    $url    = $default_site;
+    $siteid = 0;
 } else {
- $url = mysql_result($res, 0, "url");
- $siteid = mysql_result($res, 0, "id");
- @mysql_free_result($res);
- if ($siteid != 0) {
-  @mysql_query("update site set credits=credits-1, totalhits=totalhits+1, hitslastmail=hitslastmail+1, cth=cth+1 where id=$siteid");
-  $res = mysql_query("select num from 7statsite where siteid=$siteid && date='$date'");
-  if (mysql_num_rows($res) == 0) {
-   $queryas = "insert into 7statsite (siteid, date, last_hit_time, num) values ($siteid, '$date', '$time_now', 1)";
-  } else {
-   $queryas = "update 7statsite set last_hit_time='$time_now', num=num+1 where siteid=$siteid && date='$date'";
-  }
-  @mysql_free_result($res);
-  @mysql_query($queryas);
- }
-}
-$_SESSION['sess_data']['surf_encoder_vals'] = md5(rand(10000, 100000000));
-$_SESSION['sess_data']['pgv']++;
-if (!isset($delay)) {$delay = $_SESSION['sess_data']['reftim'];}
-if ($credit_me == 'yes') {
-   $why = "Credits Per View: <b>" . $_SESSION['sess_data']['rate'] . "</b>";
-   $res = mysql_query("SELECT * FROM 7stat WHERE usrid='" . $_SESSION['sess_data']['usrid'] . "' && date='$date'");
-   if (mysql_num_rows($res) == 0) {
-    $query = "insert into 7stat (usrid, date, time, pg_views, num) values (0, '" . $date . "', '" . $time_now . "', 1, " . $_SESSION['sess_data']['rate'] . ")";
-    $my_crds_today = $_SESSION['sess_data']['rate'];
-    $iam_waiting = 'yes';
-	@mysql_free_result($res);
-   } else {
-    $c_today = mysql_result($res, 0, "num");
-	$laccess_time = mysql_result($res, 0, "time");
-    $was_paid_t = mysql_result($res, 0, "received_pay");
-    $thevftime = strftime("%H:%M:%S", strtotime("$laccess_time + " . $_SESSION['sess_data']['reftim'] . " seconds"));
-    if ($thevftime>$time_now) {
-    	$wait = $_SESSION['sess_data']['reftim'];
-    	if($wait <=0) $wait =10;
- echo("<head><title>$title</title><meta http-equiv=\"Refresh\" content=\"$wait;URL=" . $self_url . "surfbarvisitor.php?vc_val=" . md5($_SESSION['sess_data']['surf_encoder_vals']) . "\"></head><body><b>Cheating Timer! Re-connecting in $wait seconds...</b></body></html>");
- mysql_close;
- exit;
-     exit;
-	} elseif ($c_today >= $daily_max) {
-	 echo("Sorry you have earned your daily maximum of $daily_max credits!<br />Please return tomorrow!<br /><br /><a href=\"$self_url\" target=\"_top\">Login to your account here.</a>");
-	 session_destroy();
-	 mysql_close;
-	 exit;
-	} else {
-     $query = "update 7stat set time='$time_now', pg_views=pg_views+1, num=num+" . $_SESSION['sess_data']['rate'] . " where usrid=0 && date='$date'";
-     $my_crds_today = mysql_result($res, 0, "num") + $_SESSION['sess_data']['rate'];
-     if ($was_paid_t == 'no') {
-      $iam_waiting = 'yes';
-     } elseif ($was_paid_t == 'yes') {
-      $iam_waiting = 'no';
-     }
+    $url    = $site['url'];
+    $siteid = (int) $site['id'];
+    if ($siteid != 0) {
+        db_write('UPDATE site SET credits = credits - 1, totalhits = totalhits + 1,
+                  hitslastmail = hitslastmail + 1, cth = cth + 1 WHERE id = ?', 'i', array($siteid));
+        $exists = db_scalar('SELECT num FROM 7statsite WHERE siteid = ? AND date = ? LIMIT 1',
+            'is', array($siteid, $date));
+        if ($exists === null) {
+            db_write('INSERT INTO 7statsite (siteid, date, last_hit_time, num) VALUES (?, ?, ?, 1)',
+                'iss', array($siteid, $date, $time_now));
+        } else {
+            db_write('UPDATE 7statsite SET last_hit_time = ?, num = num + 1 WHERE siteid = ? AND date = ?',
+                'sis', array($time_now, $siteid, $date));
+        }
     }
-	@mysql_free_result($res);
-   }
-   $_SESSION['sess_data']['cts'] = $_SESSION['sess_data']['cts'] + $_SESSION['sess_data']['rate'];
-   $_SESSION['sess_data']['sts']++;
-  }
-  if ($_SESSION['sess_data']['mmax'] == 0) {
-   $extra_js = "top.window.moveTo(0,0);\nif (document.all) {\ntop.window.resizeTo(screen.availWidth,screen.availHeight);\n}\nelse if (document.layers||document.getElementById) {\nif\n(top.window.outerHeight<screen.availHeight||top.window.outerWidth<screen.availWidth){\ntop.window.outerHeight = screen.availHeight;\ntop.window.outerWidth = screen.availWidth;\n}\n}\nwindow.focus();\n";
-  }
-echo("<html>\n<head>\n<title>$title</title>\n<link rel=stylesheet type=text/css href=$self_url"."bar.css>\n");
-  echo("<script language=\"JavaScript\">\n<!--\ndefaultStatus = '$title';\nif (parent.location.href == self.location.href) {window.location.href = 'surf.php';}\n
+}
+
+$_SESSION['sess_data']['surf_encoder_vals'] = md5(rand(10000, 100000000));
+$next_token = md5($_SESSION['sess_data']['surf_encoder_vals']);
+$_SESSION['sess_data']['pgv'] = (int) ($sess['pgv'] ?? 0) + 1;
+$delay = $reftim;
+
+$my_crds_today = 0;
+if ($credit_me == 'yes') {
+    $why = 'Credits Per View: <b>' . htmlspecialchars($rate) . '</b>';
+    $stat = db_row("SELECT num, time, received_pay FROM 7stat WHERE usrid = 0 AND date = ? LIMIT 1",
+        's', array($date));
+    if ($stat === null) {
+        db_write('INSERT INTO 7stat (usrid, date, time, pg_views, num) VALUES (0, ?, ?, 1, ?)',
+            'ssd', array($date, $time_now, $rate));
+        $my_crds_today = $rate;
+    } else {
+        $c_today   = (float) $stat['num'];
+        $laccess   = (string) $stat['time'];
+        $thevftime = date('H:i:s', strtotime("$laccess + $reftim seconds"));
+        if ($thevftime > $time_now) {
+            $wait = ($reftim <= 0) ? 10 : $reftim;
+            echo "<head><title>" . htmlspecialchars($title) . "</title>"
+                . "<meta http-equiv=\"Refresh\" content=\"$wait;URL=" . htmlspecialchars($self_url)
+                . "surfbarvisitor.php?vc_val=$next_token\"></head><body>"
+                . "<b>Cheating Timer! Re-connecting in $wait seconds...</b></body></html>";
+            exit;
+        } elseif ($c_today >= $daily_max) {
+            echo 'Sorry you have earned your daily maximum of ' . htmlspecialchars($daily_max)
+                . " credits!<br />Please return tomorrow!<br /><br />"
+                . '<a href="' . htmlspecialchars($self_url) . '" target="_top">Login to your account here.</a>';
+            session_destroy();
+            exit;
+        } else {
+            db_write('UPDATE 7stat SET time = ?, pg_views = pg_views + 1, num = num + ? WHERE usrid = 0 AND date = ?',
+                'sds', array($time_now, $rate, $date));
+            $my_crds_today = $c_today + $rate;
+        }
+    }
+    $_SESSION['sess_data']['cts'] = (float) ($sess['cts'] ?? 0) + $rate;
+    $_SESSION['sess_data']['sts'] = (int) ($sess['sts'] ?? 0) + 1;
+}
+
+$sts = (int) ($_SESSION['sess_data']['sts'] ?? 0);
+$title_esc = htmlspecialchars($title);
+$self_esc  = htmlspecialchars($self_url);
+
+$extra_js = '';
+if ((int) ($sess['mmax'] ?? 0) === 0) {
+    $extra_js = "top.window.moveTo(0,0);\nif (document.all) {\ntop.window.resizeTo(screen.availWidth,screen.availHeight);\n}\n"
+        . "else if (document.layers||document.getElementById) {\nif\n(top.window.outerHeight<screen.availHeight||top.window.outerWidth<screen.availWidth){\n"
+        . "top.window.outerHeight = screen.availHeight;\ntop.window.outerWidth = screen.availWidth;\n}\n}\nwindow.focus();\n";
+}
+
+echo "<html>\n<head>\n<title>$title_esc</title>\n<link rel=stylesheet type=text/css href={$self_esc}bar.css>\n";
+echo "<script language=\"JavaScript\">\n<!--\ndefaultStatus = '$title_esc';\nif (parent.location.href == self.location.href) {window.location.href = 'surf.php';}\n
 var counter=1+parseInt($delay);
 var paused=0;
 
@@ -179,42 +187,27 @@ function open_w(imf){
 
 }
 $extra_js
-//-->\n</script>\n");
-  if ($my_crds_today == "") {$my_crds_today = 0; }
-  echo("</head>\n<body onLoad=\"do_count();\"  bgcolor=\"#000000\">\n");
-  echo("<script language=JavaScript>window.status=\"$title\";top.frames[1].location.href = \"$url\";</script>\n");
-  echo("<script language=JavaScript>if (document.all) document.body.onmousedown=new Function(\"if (event.button==2||event.button==3)alert('Sorry, right click is disabled here!')\")</script>\n");
+//-->\n</script>\n";
 
-echo("<form name=f method=GET><input type=hidden name=\"".session_name()."\" value=" . session_id() . "><input type=hidden name=vc_val value=" . md5($_SESSION['sess_data']['surf_encoder_vals']) . ">
+echo "</head>\n<body onLoad=\"do_count();\"  bgcolor=\"#000000\">\n";
+echo "<script language=JavaScript>window.status=\"$title_esc\";top.frames[1].location.href = \"" . addslashes($url) . "\";</script>\n";
+echo "<script language=JavaScript>if (document.all) document.body.onmousedown=new Function(\"if (event.button==2||event.button==3)alert('Sorry, right click is disabled here!')\")</script>\n";
+
+echo "<form name=f method=GET><input type=hidden name=\"" . session_name() . "\" value=" . session_id() . ">"
+    . "<input type=hidden name=vc_val value=$next_token>
         <table width=\"100%\" border=\"0\" cellspacing=\"0\" cellpadding=\"2\"><tr>
 <td width=\"20%\" valign=top><div align=\"center\">
-<img src=$self_url" . "images/surflogo.jpg border=0>
+<img src={$self_esc}images/surflogo.jpg border=0>
 </div></td>
-<td width=\"40%\" valign=top><div align=\"center\">");
-echo("<input type=button name=\"stimer\" size=4 style=\"border: 0px;border-style: none; Color: #FFFFFF; background-color: #000000; text-align: center; top: 0; position: relative; float: center;\" onClick=\"return false;\"> <input name=\"stopgo\" value=\"« Pause Surf »\" type=\"button\" style=\"border: 0px; border-style: none; Color: #FFFFFF; background-color: #000000; width:100px; height:20px; text-align: center; top: 0; position: relative; float: center; cursor: hand;\" onClick=\"pause_time();\"><br>
-        [<a href=$self_url" . "signup.php target=_top>Open Account</a>] [<a href=\"#\" onClick=\"open_w('$url');\">Open Site</a>] [<b>Site ID: $siteid</b>]");
+<td width=\"40%\" valign=top><div align=\"center\">";
+echo "<input type=button name=\"stimer\" size=4 style=\"border: 0px;border-style: none; Color: #FFFFFF; background-color: #000000; text-align: center; top: 0; position: relative; float: center;\" onClick=\"return false;\"> "
+    . "<input name=\"stopgo\" value=\"« Pause Surf »\" type=\"button\" style=\"border: 0px; border-style: none; Color: #FFFFFF; background-color: #000000; width:100px; height:20px; text-align: center; top: 0; position: relative; float: center; cursor: hand;\" onClick=\"pause_time();\"><br>
+        [<a href={$self_esc}signup.php target=_top>Open Account</a>] [<a href=\"#\" onClick=\"open_w('" . addslashes($url) . "');\">Open Site</a>] [<b>Site ID: $siteid</b>]";
 
+echo "</div></td><td width=\"40%\" valign=top><center>
+ID #: <b>" . htmlspecialchars((string) ($sess['usrid'] ?? 'Guest')) . "</b> | $why | Credits This Surf: <b>" . htmlspecialchars($_SESSION['sess_data']['cts'] ?? 0) . "</b> | Credits Today: <b>" . htmlspecialchars($my_crds_today) . "</b><br>
+$surf_ban_rotator</center></td></tr></table>\n";
 
-  if (isset($_SESSION['sess_data']['contex']) && $credit_me == 'yes') {
-    if (($_SESSION['sess_data']['sts'] % $_SESSION['sess_data']['contex']) == 0) {
-        $_SESSION['sess_data']['won'] = 'really';
-        echo("<br><br><font color=\"#ff0000\"><b>You have won " . $_SESSION['sess_data']['contey'] . " bonus credits!</b></font><br><a href=$self_url" . "signup.php target=_top>Click here to add them to your account!</a>\n");
-    }
-  }
-  if (isset($_SESSION['sess_data']['contcx']) && $credit_me == 'yes' && $_SESSION['sess_data']['won'] != 'really') {
-    if (($_SESSION['sess_data']['sts'] % $_SESSION['sess_data']['contcx']) == 0) {
-        $_SESSION['sess_data']['ccwon'] = 'ccreallycc';
-        echo("<font color=\"#ff0000\"><b>You have won <b>\$" . $_SESSION['sess_data']['contcy'] . "</b> bonus cash!</b></font><br><a href=$self_url" . "signup.php target=_top>Click here to credit it to your account!</a>\n");
-    }
-  }
-echo("</div></td><td width=\"40%\" valign=top><center>
-ID #: <b>" . $_SESSION['sess_data']['usrid'] . "</b> | $why | Credits This Surf: <b>" . $_SESSION['sess_data']['cts'] . "</b> | Credits Today: <b>$my_crds_today</b><br>
-$surf_ban_rotator</center></td></tr></table>\n");
-  $surplus = 1;
-@mysql_query("update adminprops set value=value+$surplus where field='surplu'");
-$resins = @mysql_query($query);
-$la = date("Y-m-d H:i:s");
-echo("</form>\n</body>\n</html>");
-mysql_close;
+db_write("UPDATE adminprops SET value = value + 1 WHERE field = 'surplu'");
+echo "</form>\n</body>\n</html>";
 exit;
-?>

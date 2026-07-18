@@ -1,65 +1,76 @@
 <?php
-if ($_SERVER['REMOTE_ADDR']=='127.0.0.1') {$_SERVER['REMOTE_ADDR']=$_SERVER['HTTP_X_FORWARDED_FOR'];}
-if (isset($_REQUEST['_SESSION'])) {
-	header("Location: $self_url/?e=sess-invasion");
-	@session_destroy();
-	@mysql_close;
-	exit;
-}
-function checkauth() {
-	global $self_url;
-	//exit(print_r($_SESSION));
-	if (!isset($_SESSION['sess_name']) || !isset($_SESSION['sess_passwd'])) {
-		header("Location: $self_url?session-expired");
-		session_destroy();
-		mysql_close;
-		exit;
-	} else {
-		$res = mysql_query("select * from user where email='" . $_SESSION['sess_name'] . "'");
-		if (mysql_num_rows($res) != 0) {
-			$mysaved_pas = mysql_result($res, 0, "passwd");
-			$my_ac = mysql_result($res, 0, "ac");
-			if (md5($mysaved_pas) != $_SESSION['sess_passwd'] || $my_ac != 0) {
-				header("Location: $self_url?login-error");
-				session_destroy();
-				mysql_close;
-				exit;
-			}
-		} else {
-			header("Location: $self_url?user-not-found");
-			session_destroy();
-			mysql_close;
-			exit;
-		}
-		return($res);
-	}
+/**
+ * auth.php - Session authentication for the surf / earn-credit subsystem.
+ *
+ * Hardened: user lookups use prepared statements (the account email comes from
+ * the session and must never be concatenated into SQL), and both helpers now
+ * return the authenticated user row as an associative array so callers can read
+ * fields directly (e.g. $user['id']) instead of via the removed mysql_result().
+ *
+ * Requires db.php to have been included first (provides db_row()).
+ */
+
+// Behind a local reverse proxy, prefer the forwarded client address.
+if (isset($_SERVER['REMOTE_ADDR']) && $_SERVER['REMOTE_ADDR'] === '127.0.0.1'
+    && !empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+    $_SERVER['REMOTE_ADDR'] = $_SERVER['HTTP_X_FORWARDED_FOR'];
 }
 
-function checkbarauth() {
-	global $self_url;
-	if (!isset($_SESSION['sess_name']) || !isset($_SESSION['sess_passwd'])) {
-		header("Location: $self_url"."bar_break.php?error=session-expired");
-		session_destroy();
-		mysql_close;
-		exit;
-	} else {
-		$res = mysql_query("select * from user where email='" . $_SESSION['sess_name'] . "'");
-		if (mysql_num_rows($res) != 0) {
-			$mysaved_pas = mysql_result($res, 0, "passwd");
-			$my_ac = mysql_result($res, 0, "ac");
-			if (md5($mysaved_pas) != $_SESSION['sess_passwd'] || $my_ac != 0) {
-				header("Location: $self_url"."bar_break.php?error=session-expired");
-				session_destroy();
-				mysql_close;
-				exit;
-			}
-		} else {
-			header("Location: $self_url"."bar_break.php?error=session-expired");
-			session_destroy();
-			mysql_close;
-			exit;
-		}
-		return($res);
-	}
+// Block attempts to inject a forged _SESSION via request variables.
+if (isset($_REQUEST['_SESSION'])) {
+    global $self_url;
+    header('Location: ' . $self_url . '?e=sess-invasion');
+    $_SESSION = array();
+    @session_destroy();
+    exit;
 }
-?>
+
+/**
+ * Look up and validate the currently logged-in user.
+ *
+ * @param string $error_redirect Absolute URL to redirect to on any failure.
+ * @return array The authenticated user row.
+ */
+function te_authenticate($error_redirect)
+{
+    if (empty($_SESSION['sess_name']) || empty($_SESSION['sess_passwd'])) {
+        header('Location: ' . $error_redirect);
+        session_destroy();
+        exit;
+    }
+
+    $user = db_row(
+        'SELECT * FROM user WHERE email = ? LIMIT 1',
+        's',
+        array($_SESSION['sess_name'])
+    );
+
+    if (!$user) {
+        header('Location: ' . $error_redirect);
+        session_destroy();
+        exit;
+    }
+
+    // The session stores md5() of the stored password; account must be active
+    // (ac == 0). hash_equals guards against timing side-channels.
+    if (!hash_equals(md5((string) $user['passwd']), (string) $_SESSION['sess_passwd'])
+        || (int) $user['ac'] !== 0) {
+        header('Location: ' . $error_redirect);
+        session_destroy();
+        exit;
+    }
+
+    return $user;
+}
+
+function checkauth()
+{
+    global $self_url;
+    return te_authenticate($self_url . '?session-expired');
+}
+
+function checkbarauth()
+{
+    global $self_url;
+    return te_authenticate($self_url . 'bar_break.php?error=session-expired');
+}
